@@ -1,0 +1,113 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Jev Cloth 0.5</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#111;color:#eee;font:14px system-ui}
+#c{width:100%;height:100%;display:block;touch-action:none}
+#ui{position:fixed;left:10px;bottom:10px;background:#000b;padding:10px;border-radius:10px;max-width:330px}
+button{font-size:16px;padding:7px;margin:2px}.small{opacity:.75;font-size:12px}
+textarea{width:300px;height:95px;background:#222;color:#ddd}
+</style>
+<canvas id="c"></canvas>
+<div id="ui">
+<b>Jev Cloth 0.5</b><br>
+1本指: 布をつまんで動かす / 空白: 視点回転<br>
+<button id="jev">入力JSONを作成</button><button id="save">JSONを保存</button>
+<button id="load">Jev結果JSONを選択</button><button id="apply">Jev結果を適用</button>
+<input id="filepick" type="file" accept=".json,application/json" hidden>
+<div class="small" id="status">11×11 / 5mm material grid</div>
+<textarea id="box" placeholder="入力JSONまたはJev返却JSON"></textarea>
+</div>
+<script>
+const cv=document.querySelector('#c'),ctx=cv.getContext('2d'),N=11,S=5;
+let P=[], selected=null, yaw=0,pitch=0, last=null, seq=0,lastPayload=null;
+for(let r=0;r<N;r++){P[r]=[];for(let c=0;c<N;c++){
+ let x=(c-5)*S,y=(r-5)*S,z=1.0+1.7*Math.exp(-((r-5)**2+(c-5)**2)/12);
+ P[r][c]={x,y,z,rx:x,ry:y,rz:z};
+}}
+function resize(){cv.width=innerWidth*devicePixelRatio;cv.height=innerHeight*devicePixelRatio;draw()} addEventListener('resize',resize);
+function proj(p){
+ let x=p.x,y=p.y,z=p.z;
+ let x1=Math.cos(yaw)*x-Math.sin(yaw)*y, y1=Math.sin(yaw)*x+Math.cos(yaw)*y;
+ let y2=Math.cos(pitch)*y1-Math.sin(pitch)*z, z2=Math.sin(pitch)*y1+Math.cos(pitch)*z;
+ let k=Math.min(cv.width,cv.height)/62, ox=cv.width*.5,oy=cv.height*.36;
+ return [ox+x1*k,oy-y2*k,z2,k];
+}
+function draw(){
+ ctx.clearRect(0,0,cv.width,cv.height);
+ ctx.fillStyle='#202020';ctx.fillRect(cv.width*.12,cv.height*.08,cv.width*.76,cv.height*.56);
+ ctx.fillStyle='#777';ctx.font=(18*devicePixelRatio)+'px system-ui';ctx.fillText('CLOTH',cv.width*.43,cv.height*.12);
+ ctx.lineWidth=2.2*devicePixelRatio;ctx.strokeStyle='#f2f2f2';
+ for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+  if(c<N-1){let a=proj(P[r][c]),b=proj(P[r][c+1]);ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke()}
+  if(r<N-1){let a=proj(P[r][c]),b=proj(P[r+1][c]);ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke()}
+ }
+ for(let r=0;r<N;r++)for(let c=0;c<N;c++){let a=proj(P[r][c]);ctx.beginPath();ctx.arc(a[0],a[1],selected&&selected[0]==r&&selected[1]==c?6:3,0,7);ctx.fillStyle='#fff';ctx.fill()}
+}
+function nearest(x,y){
+ let best=null,d=18*devicePixelRatio;
+ for(let r=0;r<N;r++)for(let c=0;c<N;c++){let q=proj(P[r][c]),dd=Math.hypot(q[0]-x,q[1]-y);if(dd<d){d=dd;best=[r,c]}}
+ return best;
+}
+cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);last=[e.clientX*devicePixelRatio,e.clientY*devicePixelRatio];selected=nearest(...last);draw()});
+cv.addEventListener('pointermove',e=>{
+ if(!last)return;let x=e.clientX*devicePixelRatio,y=e.clientY*devicePixelRatio,dx=x-last[0],dy=y-last[1];
+ if(selected){let [r,c]=selected,k=proj(P[r][c])[3];P[r][c].x+=dx/k;P[r][c].z-=dy/k;
+   // immediate local visual response only; Jev will solve the actual cloth.
+   for(let rr=0;rr<N;rr++)for(let cc=0;cc<N;cc++){let d=Math.hypot(rr-r,cc-c);if(d>0&&d<2.3){let w=.10*Math.exp(-d);P[rr][cc].x+=dx/k*w;P[rr][cc].z-=dy/k*w}}
+ }else{yaw+=dx/cv.width*3;pitch+=dy/cv.height*3}
+ last=[x,y];draw()
+});
+cv.addEventListener('pointerup',()=>{last=null;selected=null;draw()});
+
+function geometry(){
+ let pts=[],edges=[];
+ for(let r=0;r<N;r++)for(let c=0;c<N;c++){let p=P[r][c];pts.push([+p.x.toFixed(3),+p.y.toFixed(3),+p.z.toFixed(3)])}
+ for(let r=0;r<N;r++)for(let c=0;c<N;c++){let i=r*N+c;if(c<N-1)edges.push([i,i+1,5]);if(r<N-1)edges.push([i,i+N,5])}
+ return {points:pts,edges};
+}
+function makePayload(){
+ seq++;let g=geometry(),Q={};
+ for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+   let p=P[r][c], moved=Math.hypot(p.x-p.rx,p.y-p.ry,p.z-p.rz);
+   let a=[[0,0,0],[0,0,1],[0,0,-1],[-1,0,0],[1,0,0],[0,-1,0],[0,1,0]];
+   if(moved>1)a.push([0,0,2],[0,0,-2]);
+   Q[`q${r}_${c}`]={type:"choice",instructions:`Choose coherent next displacement for material point[${r},${c}].`,criteria:Object.fromEntries(a.map((v,i)=>[`v${i}`,`dX=${v[0]},dY=${v[1]},dZ=${v[2]} mm`]))}
+ }
+ return {model:"jev-1.13.0",state:{experiment:"interactive_cloth_0_1",sequence:seq,
+  grid:"11x11 material sheet, 5mm rest spacing",material:"thick student-uniform trouser fabric; strong warp/weft length resistance; moderate shear/bending; thickness 1.2mm",
+  geometry:g,user_constraint:selected?{node:selected,target:[P[selected[0]][selected[1]].x,P[selected[0]][selected[1]].y,P[selected[0]][selected[1]].z]}:null,
+  rule:"Predict the next coherent embedded 3D material surface displacement from geometry, connectivity, material properties and user constraint. Overhang is allowed; material neighbors remain connected; avoid self-intersection."},questions:Q};
+}
+document.querySelector('#jev').onclick=()=>{
+ lastPayload=makePayload();let text=JSON.stringify(lastPayload);document.querySelector('#box').value=text;
+ document.querySelector('#status').textContent=`入力JSON作成済み: ${(text.length/1024).toFixed(1)} KB / seq ${seq}`;
+};
+document.querySelector('#save').onclick=()=>{
+ if(!lastPayload) lastPayload=makePayload();
+ const text=JSON.stringify(lastPayload),blob=new Blob([text],{type:'application/json'}),url=URL.createObjectURL(blob);
+ const a=document.createElement('a');a.href=url;a.download=`systemtwo-input-${String(seq).padStart(3,'0')}.json`;
+ document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+ document.querySelector('#status').textContent=`入力JSONを保存: systemtwo-input-${String(seq).padStart(3,'0')}.json`;
+};
+const fp=document.querySelector('#filepick');
+document.querySelector('#load').onclick=()=>fp.click();
+fp.onchange=async()=>{
+ const f=fp.files&&fp.files[0];if(!f)return;
+ try{const text=await f.text();JSON.parse(text);document.querySelector('#box').value=text;
+ document.querySelector('#status').textContent=`Jev結果を読込: ${f.name}`;}
+ catch(e){document.querySelector('#status').textContent='JSON読込エラー: '+e.message}
+};
+document.querySelector('#apply').onclick=()=>{
+ try{
+  let j=JSON.parse(document.querySelector('#box').value),ans=j.answers;
+  for(let q in ans){let m=q.match(/^q(\d+)_(\d+)$/);if(!m)continue;let r=+m[1],c=+m[2],E=[0,0,0];
+   let payload=lastPayload;if(!payload)throw new Error('先にJev用JSONを作ってください');let crit=payload.questions[q].criteria;
+   for(let k in ans[q].probabilities){let mm=crit[k].match(/dX=(-?\d+),dY=(-?\d+),dZ=(-?\d+)/);if(!mm)continue;let pr=ans[q].probabilities[k];E[0]+=pr*+mm[1];E[1]+=pr*+mm[2];E[2]+=pr*+mm[3]}
+   P[r][c].x+=E[0];P[r][c].y+=E[1];P[r][c].z=Math.max(0,P[r][c].z+E[2]);
+  } draw();document.querySelector('#status').textContent="Jev result applied";
+ }catch(e){document.querySelector('#status').textContent="JSON error: "+e.message}
+};
+resize();
+</script>
