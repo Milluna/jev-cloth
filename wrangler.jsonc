@@ -2,11 +2,20 @@
   "name": "jev-cloth",
   "main": "src/index.js",
   "compatibility_date": "2026-09-20",
+
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     "run_worker_first": [
       "/api/*"
     ]
-  }
+  },
+
+  "secrets_store_secrets": [
+    {
+      "binding": "TYPESAFE_API_KEY",
+      "store_id": "9451825d320b4fd99418edca8652ed64",
+      "secret_name": "TYPESAFE_API_KEY"
+    }
+  ]
 }
